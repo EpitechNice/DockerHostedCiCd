@@ -1,5 +1,5 @@
 - [ ] Check for coding style errors
-  - [ ] Done within the action itself
+  - [ ] Done out of the action itself
 - [ ] Build (Make / CMake)
   - [ ] Detect weather it's a Makefile or CMakeFile.txt
   - [ ] Run the corresponding

@@ -1,0 +1,28 @@
+
+     ██████╗██╗       ██████╗██████╗
+    ██╔════╝██║      ██╔════╝██╔══██╗
+    ██║     ██║█████╗██║     ██║  ██║
+    ██║     ██║╚════╝██║     ██║  ██║
+    ╚██████╗██║      ╚██████╗██████╔╝
+     ╚═════╝╚═╝       ╚═════╝╚═════╝
+
+    0x01
+This docker based Ci-Cd aims to integrate all necessary for EPITECH in order to
+ make life easier by automating some repetitives tasks you might end up having
+ to do.
+
+    0x02
+List of all required actions this tool need to do:
+ - Coding style check (within the action yaml file, through the official
+    docker image)
+ - Build test (verify that no build errors occures)
+ - Unit tests (run a defined .sh file)
+ - Documentation building (for C/C++, using doxide and mkdocs)
+ - Discord integration (send message using WebHooks to get action report)
+ - Repository mirroring (to school repo)
+
+    0x03
+List of actions I would like this tool to do:
+ - [ ] Gitleaks: Check for forgoten plain text passwords, API keys...
+ - [ ] Discord bot integration (control the actions through discord bot, server
+    control, users management, repos creation...)
