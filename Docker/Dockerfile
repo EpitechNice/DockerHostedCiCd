@@ -1,5 +1,14 @@
 FROM ubuntu:22.04
 
+# Env variables :
+# GITHUB_REPOSITORY
+# WEBHOOK_URL
+# PUSH_AUTHOR
+# PUSH_MESSAGE
+# PUSH_URL
+# DOC_REPOSITORY
+# SSH_PRIVATE_KEY
+
 RUN mkdir /app/
 
 RUN apt-get update

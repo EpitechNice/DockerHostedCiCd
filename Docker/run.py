@@ -7,23 +7,29 @@ import requests
 import subprocess
 import traceback
 import tempfile
+import shutil
 import shlex
+import yaml
 import json
 import time
 import sys
 import os
 
-valid_color = 5439232
-medium_color = 16750848
-invalid_color = 16711680
+os.chdir("/data/")
 
-GITHUB_REPOSITORY = os.getenv("GITHUB_REPOSITORY")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
-PUSH_AUTHOR = os.getenv("PUSH_AUTHOR")
-PUSH_MESSAGE = os.getenv("PUSH_MESSAGE")
-PUSH_URL = os.getenv("PUSH_URL")
-DOC_REPOSITORY = os.getenv("DOC_REPOSITORY")
-SSH_PRIVATE_KEY = os.getenv("SSH_PRIVATE_KEY")
+valid_color         = 5439232
+medium_color        = 16750848
+invalid_color       = 16711680
+
+REPO_TITLE          = None
+
+GITHUB_REPOSITORY   = os.getenv("GITHUB_REPOSITORY")
+WEBHOOK_URL         = os.getenv("WEBHOOK_URL")
+PUSH_AUTHOR         = os.getenv("PUSH_AUTHOR")
+PUSH_MESSAGE        = os.getenv("PUSH_MESSAGE")
+PUSH_URL            = os.getenv("PUSH_URL")
+DOC_REPOSITORY      = os.getenv("DOC_REPOSITORY")
+SSH_PRIVATE_KEY     = os.getenv("SSH_PRIVATE_KEY")
 
 def handle_uncought_exception(type, value, error_traceback):
     error_tb = '\n'.join(traceback.format_tb(error_traceback))
@@ -43,25 +49,25 @@ def sys_cmd(command: str) -> tuple[bytes, int]:
     except:
         status = 1
 
+    print(process.stdout.decode())
+
     return (process.stdout, status)
 
 ###### DEBUG ######
 
 message_content = """```ansi
-Compilation COMPILATION_STATUS
+The action ACTION_STATUS
 ```
 
-Logs :
 ```ansi
+Compilation COMPILATION_STATUS
+
 COMPILATION_LOGS
 ```
 
 ```ansi
 Unit testing UNIT_TESTING_STATUS
-```
 
-Logs :
-```ansi
 UNIT_TESTING_LOGS
 ```
 
@@ -78,6 +84,10 @@ GitLeaks :
 ```ansi
 GITLEAKS_LOGS
 ```
+
+```ansi
+Documentation DOCUMENTATION_STATUS
+```
 """
 
 ###### DEBUG ######
@@ -91,28 +101,25 @@ def format_time(float_time: timedelta) -> str:
 
     return f"{hours:02}h:{minutes:02}m:{seconds:02}s.{milliseconds:03}"
 
-def build_mkdocs() -> bool:
+def build_mkdocs() -> tuple[str, bool]:
+    global REPO_TITLE
+    logs = ""
     file = "doxide.yaml"
     if not (os.path.isfile(file)):
         file = "doxide.yml"
     if not (os.path.isfile(file)):
-        return False
-    with open(file, 'r') as f:
-        data = f.read()
-    title = description = None
-    for line in data.split('\n'):
-        if line.startswith("title: "):
-            title = ' '.join(line.split(' ')[1:])
-        if line.startswith("description: "):
-            description = ' '.join(line.split(' ')[1:])
-    if title is None or description is None:
-        return False
+        return ("Could not find doxide.yaml file", False)
+    with open(file) as f:
+        doc = yaml.full_load(f)
+    for required in ("title", "description"):
+        if doc.get(required) is None:
+            return ("Missing required fields on doxide.yaml", False)
+    REPO_TITLE = doc.get("title")
     with open("mkdocs.yaml", 'w+') as f:
-        f.write(f"""site_name: {title}
-site_description: {description}
+        f.write(f"""site_name: {doc.get('title')}
+site_description: {doc.get('description')}
 theme:
   name: material
-  custom_dir: docs/overrides
   features:
     - navigation.indexes
   palette:
@@ -149,9 +156,16 @@ extra_javascript:
   - javascripts/mathjax.js
   - https://polyfill.io/v3/polyfill.min.js?features=es6
   - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js""")
-    status = sys_cmd("doxide build")[1]
-    status += sys_cmd("mkdocs build")[1]
-    return status == 0
+    cmd = sys_cmd("doxide build")
+    logs += "~$ doxide build\n"
+    logs += cmd[0].decode()
+    status = cmd[1]
+    logs += "~$ mkdocs build\n"
+    cmd = sys_cmd("mkdocs build")
+    logs += cmd[0].decode()
+    status += cmd[1]
+    os.remove("mkdocs.yaml")
+    return (logs, status == 0)
 
 def run_compilation() -> tuple[str, bool]:
     logs = ""
@@ -196,7 +210,7 @@ def run_compilation() -> tuple[str, bool]:
             logs += cmd[0].decode()
             status += cmd[1]
             logs += f"~$ cmake --build .\n"
-            cmd = sys_cmd(f"cmake --build .").decode()
+            cmd = sys_cmd(f"cmake --build .")
             logs += cmd[0].decode()
             status += cmd[1]
             os.chdir(cwd)
@@ -204,20 +218,19 @@ def run_compilation() -> tuple[str, bool]:
     logs += f"\nCompilation took \033[35m{format_time(compilation_time)}\033[0m to complete"
     return (logs, status == 0)
 
-def run_coding_style() -> tuple[str, bool]:
+def run_coding_style() -> tuple[str, bool, bool]:
     logs = ""
     status = 0
     info = minor = major = 0
 
     if not os.path.isfile("./coding-style-reports.log"):
         logs += "No \"coding-style-reports.log\" file found.\nIgnoring"
-        return (logs, status == 0)
+        return (logs, status == 0, False)
 
     with open("./coding-style-reports.log", 'r') as f:
         coding_style_errors = f.read()
 
     for line in coding_style_errors.split('\n'):
-        # ./target/debug/libtcp_tunnel_template.so:1: MAJOR:C-O1
         if line.count(':') != 3:
             logs += line + '\n'
         else:
@@ -237,22 +250,23 @@ def run_coding_style() -> tuple[str, bool]:
     os.remove("./coding-style-reports.log")
 
     logs = f"You have \033[31m{major}\033[0m major errors, \033[33m{minor}\033[0m minor errors and \033[34m{info}\033[0m infos :\n\n" + logs
-    return (logs, status == 0)
+    return (logs, status == 0, (info + minor + major == 0))
 
 def run_unit_tests() -> tuple[str, bool]:
     logs = ""
     status = 0
-    info = minor = major = 0
 
     if not os.path.isfile("./tests/run_unit_tests.sh"):
         logs += "No \"tests/run_unit_tests.sh\" file found.\nIgnoring"
         return (logs, status == 0)
 
     tests_start = time.time()
-    cmd = sys_cmd("./tests/run_unit_tests.sh")
+    os.chdir("./tests/")
+    cmd = sys_cmd("./run_unit_tests.sh")
+    os.chdir("./../")
     logs += cmd[0].decode()
     status += cmd[1]
-    tests_time += timedelta(seconds=(time.time() - tests_start))
+    tests_time = timedelta(seconds=(time.time() - tests_start))
 
     logs += f"\nUnit testing took \033[35m{format_time(tests_time)}\033[0m to complete"
 
@@ -274,37 +288,59 @@ def run_gitleaks() -> tuple[str, bool]:
 
     return (logs, status == 0)
 
-def run_documentation() -> bool:
-    if not build_mkdocs():
+def run_documentation() -> tuple[str, bool]:
+    mkdocs = build_mkdocs()
+    if not mkdocs[1]:
+        return mkdocs
+    if DOC_REPOSITORY is None:
         return False
+    global REPO_TITLE
     if not os.path.isdir(os.path.expanduser("~/.ssh/")):
         os.mkdir(os.path.expanduser("~/.ssh/"))
     with open(os.path.expanduser("~/.ssh/id_rsa"), 'w+') as f:
         f.write(SSH_PRIVATE_KEY)
-    os.chmod(os.path.expanduser("~/.ssh/id_rsa"), 0600)
-    with tempfile.TemporaryDirectory() as tmpdir:
-        os.system(f"GIT_SSH_COMMAND='ssh -v -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no -l git' git remote add mirror \"{DOC_REPOSITORY}\" {tmpdir}")
-    return True
+    os.chmod(os.path.expanduser("~/.ssh/id_rsa"), 0o400)
+    if REPO_TITLE is None:
+        print("Could not find REPO TITLE !!!")
+        return ("Could not find REPO TITLE !!!", False)
+    cwd = os.getcwd()
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            os.chdir(tmpdir)
+            os.system(f"GIT_SSH_COMMAND='ssh -v -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no -l git' git clone \"{DOC_REPOSITORY}\" .")
+            shutil.rmtree(REPO_TITLE, ignore_errors=True)
+            shutil.copytree(os.path.join(cwd, "site/"), REPO_TITLE)
+            os.system(f"GIT_SSH_COMMAND='ssh -v -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no -l git' git add .")
+            os.system(f"GIT_SSH_COMMAND='ssh -v -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no -l git' git commit -m \"[+] {REPO_TITLE} | Added documentation\"")
+            os.system(f"GIT_SSH_COMMAND='ssh -v -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no -l git' git push")
+    finally:
+        os.chdir(cwd)
+    try:
+        shutil.rmtree("./site/")
+    except:
+        pass
+    return (mkdocs[0], True)
 
 def main() -> int:
     sys.excepthook = handle_uncought_exception
 
     compilation_logs, compilation_status = run_compilation()
     unit_tests_logs, unit_tests_status = run_unit_tests()
-    coding_style_logs, coding_style_status = run_coding_style()
+    coding_style_logs, coding_style_status, had_errors = run_coding_style()
     gitleaks_logs, gitleaks_status = run_gitleaks()
 
-    action_successfull = not any((
+    doc_logs, doc_status = run_documentation()
+
+    action_successfull = all((
         compilation_status,
         unit_tests_status,
         coding_style_status,
         gitleaks_status
     ))
 
-    if not run_documentation():
-        print("Building docs failed")
-
     discord_message_content = message_content.replace(
+        "ACTION_STATUS", ("was \033[32mSuccessfull\033[0m" if action_successfull else "\033[31mFailed\033[0m")
+    ).replace(
         "COMPILATION_STATUS", ("\033[32mSuccess\033[0m" if compilation_status else "\033[31mFailure\033[0m")
     ).replace(
         "COMPILATION_LOGS", compilation_logs
@@ -318,9 +354,10 @@ def main() -> int:
         "GITLEAKS_STATUS", ("\033[32mSuccess\033[0m" if gitleaks_status else "\033[31mFailure\033[0m")
     ).replace(
         "GITLEAKS_LOGS", gitleaks_logs
+    ).replace(
+        "DOCUMENTATION_STATUS", ("\033[32mSuccess\033[0m" if doc_status else "\033[31mFailure\033[0m")
     )
 
-    url = WEBHOOK_URL
     username = PUSH_AUTHOR
 
     data = {
@@ -328,7 +365,7 @@ def main() -> int:
         "avatar_url": f"https://github.com/{username}.png",
         "embeds": [
             {
-                "color": (65280 if action_successfull else 16711680),
+                "color": ((16753408 if had_errors else 65280) if action_successfull else 16711680),
                 "author": {
                     "name": username,
                     "url": f"https://github.com/{username}/",
@@ -349,7 +386,7 @@ def main() -> int:
         }
     }
 
-    requests.post(url, json = data)
+    requests.post(WEBHOOK_URL, json = data).text
 
     return (0 if action_successfull else 1)
 
